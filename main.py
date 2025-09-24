@@ -239,17 +239,29 @@ class MetricsCollector:
         
         return metrics
     
+    def _dataclass_to_dict(self, obj):
+        """Safely convert dataclass to dictionary"""
+        if hasattr(obj, '__dataclass_fields__'):
+            # It's a dataclass instance
+            result = {}
+            for field in obj.__dataclass_fields__:
+                value = getattr(obj, field)
+                if isinstance(value, list):
+                    result[field] = [self._dataclass_to_dict(item) if hasattr(item, '__dataclass_fields__') else item for item in value]
+                else:
+                    result[field] = self._dataclass_to_dict(value) if hasattr(value, '__dataclass_fields__') else value
+            return result
+        else:
+            # It's a regular Python object
+            return obj
+    
     def _save_single_evaluation(self, metric: LLMMetrics) -> str:
         """Save a single evaluation to JSON file"""
         filename = f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hash(metric.query[:20])}.json"
         filepath = os.path.join(self.metrics_dir, filename)
         
-        # Convert dataclass to dictionary
-        metric_dict = asdict(metric)
-        
-        # Convert evaluations to dictionaries
-        if metric_dict.get('evaluations'):
-            metric_dict['evaluations'] = [asdict(eval_obj) for eval_obj in metric_dict['evaluations']]
+        # Use our safe conversion method instead of asdict()
+        metric_dict = self._dataclass_to_dict(metric)
         
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -787,7 +799,11 @@ def main() -> None:
                 
                 # Show evaluation scores if available
                 if "evaluations" in message and message["evaluations"]:
-                    avg_score = sum(eval_obj["overall_score"] for eval_obj in message["evaluations"]) / len(message["evaluations"])
+                    # Handle both dictionary and object formats
+                    if isinstance(message["evaluations"][0], dict):
+                        avg_score = sum(eval_obj["overall_score"] for eval_obj in message["evaluations"]) / len(message["evaluations"])
+                    else:
+                        avg_score = sum(eval_obj.overall_score for eval_obj in message["evaluations"]) / len(message["evaluations"])
                     st.caption(f"📊 Average Evaluation: {avg_score:.1f}/10.0 ({len(message['evaluations'])} judges)")
 
         # Chat input and processing
@@ -830,7 +846,7 @@ def main() -> None:
                                     evaluations = evaluations
                                 )
                                 
-                                # Add evaluations to message
+                                # Convert evaluations to dictionaries for session state storage
                                 eval_dicts = []
                                 for eval_obj in evaluations:
                                     eval_dicts.append({
